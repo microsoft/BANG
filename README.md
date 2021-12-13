@@ -45,11 +45,11 @@ bert_uncased_tokenize('test.tgt', 'tokenized_test.tgt')
 Binirize it with fairseq-preprocess
 ```
 fairseq-preprocess \
---user-dir bang \
+--user-dir ./bang/bang \
 --task translation_prophetnet \
 --source-lang src --target-lang tgt \
 --trainpref tokenized_train --validpref tokenized_valid --testpref tokenized_test \
---destdir processed_data --srcdict vocab.txt --tgtdict vocab.txt \
+--destdir processed_data --srcdict ./bang/vocab.txt --tgtdict ./bang/vocab.txt \
 --workers 20
 ```
 Fine tune with fairseq-train.  
@@ -70,7 +70,7 @@ PRETRAINED_MODEL=checkpoint_base_9gram_ck35.pt
 NAR_RATIO=0.0
 
 fairseq-train $DATA_DIR \
---user-dir ./prophetnet_nar  \
+--user-dir ./bang/bang  \
 --task translation_prophetnet --arch $ARCH \
 --optimizer adam --adam-betas '(0.9, 0.999)' --clip-norm 0.1 \
 --lr 0.0001 --min-lr 1e-09 --nar-ratio ${NAR_RATIO} --ngram 1 --disable-ngram-loss \
@@ -95,7 +95,7 @@ CHECK_POINT=models/model_ar/checkpoint8.pt
 SUFFIX=_ar_pelt${LENPEN}_test_beam${BEAM}
 OUTPUT_FILE=outputs/output$SUFFIX.txt
 
-PYTHONIOENCODING=utf-8 fairseq-generate ./processed_data --path $CHECK_POINT --user-dir bang --task translation_prophetnet --batch-size 36 --gen-subset train --beam $BEAM --num-workers 4 --lenpen $LENPEN 2>&1 > $OUTPUT_FILE
+PYTHONIOENCODING=utf-8 fairseq-generate ./processed_data --path $CHECK_POINT --user-dir ./bang/bang --task translation_prophetnet --batch-size 36 --gen-subset train --beam $BEAM --num-workers 4 --lenpen $LENPEN 2>&1 > $OUTPUT_FILE
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3- | sed "s/ ##//g" > outputs/sort_hypo$SUFFIX.txt
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3-  > outputs/sort_hypo$SUFFIX.txt.tokenized
 ```
@@ -112,7 +112,7 @@ PRETRAINED_MODEL=checkpoint_base_9gram_ck35.pt
 NAR_RATIO=1.0
 
 fairseq-train $DATA_DIR \
---user-dir ./prophetnet_nar  \
+--user-dir ./bang/bang  \
 --task translation_prophetnet --arch $ARCH \
 --optimizer adam --adam-betas '(0.9, 0.999)' --clip-norm 0.1 \
 --lr 0.0001 --min-lr 1e-09 --nar-ratio $NAR_RATIO --ngram 1 --disable-ngram-loss \
@@ -135,7 +135,7 @@ SUFFIX=_nar
 CHECK_POINT=models/model_nar/checkpoint40.pt
 OUTPUT_FILE=outputs/output${SUFFIX}.txt
 
-PYTHONIOENCODING=utf8 fairseq-generate processed_data  --user-dir ./prophetnet_nar --path ${CHECK_POINT} --truncate-source --max-source-positions 512 --task translation_prophetnet_nar --batch-size 36 --beam 1 --gen-subset test  2>&1 > ${OUTPUT_FILE}
+PYTHONIOENCODING=utf8 fairseq-generate processed_data  --user-dir ./bang/bang --path ${CHECK_POINT} --truncate-source --max-source-positions 512 --task translation_prophetnet_nar --batch-size 36 --beam 1 --gen-subset test  2>&1 > ${OUTPUT_FILE}
 
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3- > outputs/sort_hypo${SUFFIX}.txt
 python post_processed_nar.py outputs_v1/sort_hypo${SUFFIX}.txt outputs/sort_hypo${SUFFIX}.txt.dedup
