@@ -12,7 +12,7 @@ from fairseq.data import data_utils
 from fairseq.models import FairseqIncrementalDecoder
 
 
-class ProphetNetNARSequenceGenerator(object):
+class BANGNARSequenceGenerator(object):
     def __init__(
         self,
         tgt_dict,

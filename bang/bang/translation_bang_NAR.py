@@ -6,10 +6,10 @@ from fairseq.tasks import register_task
 from fairseq.tasks.translation import TranslationTask
 
 from .bert_dictionary_NAR import BertDictionaryNAR
-from .prophetnet_NAR_generator import ProphetNetNARSequenceGenerator
+from .bang_NAR_generator import BANGNARSequenceGenerator
 
-@register_task('translation_prophetnet_nar')
-class TranslationProphetnetNARTask(TranslationTask):
+@register_task('translation_bang_nar')
+class TranslationBANGNARTask(TranslationTask):
     def __init__(self, args, src_dict, tgt_dict):
         super().__init__(args, src_dict, tgt_dict)
 
@@ -56,7 +56,7 @@ class TranslationProphetnetNARTask(TranslationTask):
         return (self.args.max_source_positions, self.args.max_target_positions)
 
     def build_generator(self, args):
-        return ProphetNetNARSequenceGenerator(
+        return BANGNARSequenceGenerator(
                 self.target_dictionary,
                 beam_size=getattr(args, 'beam', 5),
                 max_len_a=getattr(args, 'max_len_a', 0),

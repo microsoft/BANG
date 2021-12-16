@@ -4,7 +4,7 @@ from fairseq.tasks.translation import TranslationTask
 
 from .bert_dictionary import BertDictionary
 
-@register_task('translation_prophetnet')
+@register_task('translation_bang')
 class TranslationProphetnetTask(TranslationTask):
     def __init__(self, args, src_dict, tgt_dict):
         super().__init__(args, src_dict, tgt_dict)

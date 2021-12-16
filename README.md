@@ -46,7 +46,7 @@ Binirize it with fairseq-preprocess
 ```
 fairseq-preprocess \
 --user-dir ./bang/bang \
---task translation_prophetnet \
+--task translation_bang \
 --source-lang src --target-lang tgt \
 --trainpref tokenized_train --validpref tokenized_valid --testpref tokenized_test \
 --destdir processed_data --srcdict ./bang/vocab.txt --tgtdict ./bang/vocab.txt \
@@ -54,15 +54,15 @@ fairseq-preprocess \
 ```
 Fine tune with fairseq-train.  
 ### Autoregressive Generation 
-You can directly use [ProphetNet](https://github.com/microsoft/ProphetNet) for AR finetuning. 
-Or you can also use this repo. They are equivalent. Set these parameters:    
+
+Set these parameters:    
 --disable-ngram-loss：please set True for AR finetuning    
 --ngram: please set 1 for AR finetuning  
 --nar-ratio: please set 0.0 for AR finetuning  
 --fp16: if your GPU device supports, set True to accelerate training  
 ```
 DATA_DIR=processed_data
-ARCH=prophet_ar_nar_mixed_base
+ARCH=bang_ar_nar_mixed_base
 CRITERION=ngram_language_loss_NAR_mixed
 SAVE_DIR=models/model_ar
 TENSORBOARD_LOGDIR=models/logs_ar
@@ -71,7 +71,7 @@ NAR_RATIO=0.0
 
 fairseq-train $DATA_DIR \
 --user-dir ./bang/bang  \
---task translation_prophetnet --arch $ARCH \
+--task translation_bang --arch $ARCH \
 --optimizer adam --adam-betas '(0.9, 0.999)' --clip-norm 0.1 \
 --lr 0.0001 --min-lr 1e-09 --nar-ratio ${NAR_RATIO} --ngram 1 --disable-ngram-loss \
 --lr-scheduler inverse_sqrt --warmup-init-lr 1e-07 --warmup-updates 1000 \
@@ -95,7 +95,7 @@ CHECK_POINT=models/model_ar/checkpoint8.pt
 SUFFIX=_ar_pelt${LENPEN}_test_beam${BEAM}
 OUTPUT_FILE=outputs/output$SUFFIX.txt
 
-PYTHONIOENCODING=utf-8 fairseq-generate ./processed_data --path $CHECK_POINT --user-dir ./bang/bang --task translation_prophetnet --batch-size 36 --gen-subset train --beam $BEAM --num-workers 4 --lenpen $LENPEN 2>&1 > $OUTPUT_FILE
+PYTHONIOENCODING=utf-8 fairseq-generate ./processed_data --path $CHECK_POINT --user-dir ./bang/bang --task translation_bang --batch-size 36 --gen-subset train --beam $BEAM --num-workers 4 --lenpen $LENPEN 2>&1 > $OUTPUT_FILE
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3- | sed "s/ ##//g" > outputs/sort_hypo$SUFFIX.txt
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3-  > outputs/sort_hypo$SUFFIX.txt.tokenized
 ```
@@ -104,7 +104,7 @@ grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3-  > outputs/sort_hypo$SUFFI
 --fp16: if your GPU device supports, set True to accelerate training  
 ```
 DATA_DIR=processed_data
-ARCH=prophet_ar_nar_mixed_base
+ARCH=bang_ar_nar_mixed_base
 CRITERION=ngram_language_loss_NAR_mixed
 SAVE_DIR=models/model_nar
 TENSORBOARD_LOGDIR=models/logs_nar
@@ -113,7 +113,7 @@ NAR_RATIO=1.0
 
 fairseq-train $DATA_DIR \
 --user-dir ./bang/bang  \
---task translation_prophetnet --arch $ARCH \
+--task translation_bang --arch $ARCH \
 --optimizer adam --adam-betas '(0.9, 0.999)' --clip-norm 0.1 \
 --lr 0.0001 --min-lr 1e-09 --nar-ratio $NAR_RATIO --ngram 1 --disable-ngram-loss \
 --lr-scheduler inverse_sqrt --warmup-init-lr 1e-07 --warmup-updates 1000 \
@@ -135,7 +135,7 @@ SUFFIX=_nar
 CHECK_POINT=models/model_nar/checkpoint40.pt
 OUTPUT_FILE=outputs/output${SUFFIX}.txt
 
-PYTHONIOENCODING=utf8 fairseq-generate processed_data  --user-dir ./bang/bang --path ${CHECK_POINT} --truncate-source --max-source-positions 512 --task translation_prophetnet_nar --batch-size 36 --beam 1 --gen-subset test  2>&1 > ${OUTPUT_FILE}
+PYTHONIOENCODING=utf8 fairseq-generate processed_data  --user-dir ./bang/bang --path ${CHECK_POINT} --truncate-source --max-source-positions 512 --task translation_bang_nar --batch-size 36 --beam 1 --gen-subset test  2>&1 > ${OUTPUT_FILE}
 
 grep ^H $OUTPUT_FILE | cut -c 3- | sort -n | cut -f3- > outputs/sort_hypo${SUFFIX}.txt
 python post_processed_nar.py outputs_v1/sort_hypo${SUFFIX}.txt outputs/sort_hypo${SUFFIX}.txt.dedup
@@ -144,9 +144,8 @@ python post_processed_nar.py outputs_v1/sort_hypo${SUFFIX}.txt outputs/sort_hypo
 
 ## TIPS:
 1, Autoregressive needs fewer finetuning steps, while Non-autoregressive needs longtime finetuning to get good performance.  
-2, For AR finetuning, you can directly use the code in [ProphetNet](https://github.com/microsoft/ProphetNet).  
-3, **We highly recommend you use sequence distillation before NAR finetuning.**  
-4, If you met problems to run fairseq-preprocess, fairseq-train and other commands, or if you want to modify the workflow/inference pipeline, 
+2, **We highly recommend you use sequence distillation before NAR finetuning.**  
+3, If you met problems to run fairseq-preprocess, fairseq-train and other commands, or if you want to modify the workflow/inference pipeline, 
 it's a good choice to download fairseq git repo, checkout v0.9.0, and merge our codes. Then, modify their preprocess.py, train.py or generate.py, to run your new pipeline. 
 
 

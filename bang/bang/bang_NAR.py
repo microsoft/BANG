@@ -21,14 +21,14 @@ from fairseq.modules import (
 )
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 from .learned_positional_embedding import LearnedPositionalEmbedding
-from .ngram_multihead_attention import NgramMultiheadAttention, ngram_attention_bias
+from .ngram_multihead_attention_NAR import NgramMultiheadAttentionNAR, ngram_attention_bias
 
 DEFAULT_MAX_SOURCE_POSITIONS = 512
 DEFAULT_MAX_TARGET_POSITIONS = 512
 
 
-@register_model('ngram_transformer_prophet')
-class NgramTransformerProphetModel(FairseqEncoderDecoderModel):
+@register_model('bang_nar')
+class BANGNARModel(FairseqEncoderDecoderModel):
     """
     Args:
         encoder (TransformerEncoder): the encoder
@@ -46,8 +46,6 @@ class NgramTransformerProphetModel(FairseqEncoderDecoderModel):
     @staticmethod
     def add_args(parser):
         """Add model-specific arguments to the parser."""
-        parser.add_argument('--ngram', type=int, metavar='N',
-                            help='num of predicting grams')
         parser.add_argument('--num_buckets', type=int, metavar='N',
                             help='num of buckets for relative position')
         parser.add_argument('--relative_max_distance', type=int, metavar='N',
@@ -142,9 +140,9 @@ class NgramTransformerProphetModel(FairseqEncoderDecoderModel):
             )
 
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
-        decoder = NgramTransformerDecoder(args, tgt_dict, decoder_embed_tokens)
+        decoder = NARransformerDecoder(args, tgt_dict, decoder_embed_tokens)
 
-        model = NgramTransformerProphetModel(encoder, decoder)
+        model = BANGNARModel(encoder, decoder)
 
         if args.load_from_pretrained_model is not None:
             states = torch.load(args.load_from_pretrained_model, map_location='cpu')
@@ -157,20 +155,24 @@ class NgramTransformerProphetModel(FairseqEncoderDecoderModel):
                 decoder_token_weight[2] = decoder_token_weight[102]
                 states['encoder.embed_tokens.weight'] = encoder_token_weight
                 states['decoder.embed_tokens.weight'] = decoder_token_weight
-            for position_name, target_position_length in [('encoder.embed_positions.weight', model.encoder.embed_positions.weight.size(0)), \
-                    ('decoder.embed_positions.weight', model.decoder.embed_positions.weight.size(0))]:
+            for position_name, target_position_length in [
+                ('encoder.embed_positions.weight', model.encoder.embed_positions.weight.size(0)), \
+                ('decoder.embed_positions.weight', model.decoder.embed_positions.weight.size(0))]:
                 if states[position_name].size(0) < target_position_length:
                     _index = torch.arange(states[position_name].size(1))
                     expend_position_states = states[position_name].clone()
                     while states[position_name].size(0) < target_position_length:
-                        _index = torch.cat((_index[1:],_index[:1]), dim=0)
-                        states[position_name] = torch.cat([states[position_name], expend_position_states[:,_index]], dim=0)
+                        _index = torch.cat((_index[1:], _index[:1]), dim=0)
+                        states[position_name] = torch.cat([states[position_name], expend_position_states[:, _index]],
+                                                          dim=0)
                 if states[position_name].size(0) > target_position_length:
                     states[position_name] = states[position_name][:target_position_length]
+            if states['decoder.ngram_input_embed.weight'].size(0) == 2:
+                states['decoder.ngram_input_embed.weight'] = states['decoder.ngram_input_embed.weight'][1:2, :]
             model.load_state_dict(states)
             args.load_from_pretrained_model = None  # Clear this param
 
-        return NgramTransformerProphetModel(encoder, decoder)
+        return BANGNARModel(encoder, decoder)
 
     def max_positions(self):
         return (self.encoder.max_positions(), self.decoder.max_positions())
@@ -276,10 +278,9 @@ class TransformerEncoderLayer(nn.Module):
         return x, attn
 
 
-class NgramTransformerDecoderLayer(nn.Module):
+class NARTransformerDecoderNARLayer(nn.Module):
     def __init__(
             self,
-            ngram=2,
             embedding_dim: float = 768,
             ffn_embedding_dim: float = 3072,
             num_attention_heads: float = 8,
@@ -300,16 +301,14 @@ class NgramTransformerDecoderLayer(nn.Module):
 
         # Initialize blocks
         self.activation_fn = utils.get_activation_fn(activation_fn)
-        self.ngram_self_attn = NgramMultiheadAttention(
+        self.ngram_self_attn = NgramMultiheadAttentionNAR(
             self.embedding_dim,
             num_attention_heads,
             dropout=attention_dropout,
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
             self_attention=True,
-            ngram=ngram
         )
-        self.ngram = ngram
 
         # layer norm associated with the self attention layer
         self.self_attn_layer_norm = LayerNorm(self.embedding_dim, export=export)
@@ -404,6 +403,7 @@ class NgramTransformerDecoderLayer(nn.Module):
     def make_generation_fast_(self, need_attn=False, **kwargs):
         self.need_attn = need_attn
 
+
 class TransformerEncoder(FairseqEncoder):
     """
     Transformer encoder consisting of *args.encoder_layers* layers. Each layer
@@ -425,7 +425,7 @@ class TransformerEncoder(FairseqEncoder):
         self.max_source_positions = args.max_source_positions
 
         self.embed_tokens = embed_tokens
-        self.embed_scale = None #math.sqrt(embed_dim)
+        self.embed_scale = None  # math.sqrt(embed_dim)
         self.embed_positions = LearnedPositionalEmbedding(
             args.max_source_positions + 1 + self.padding_idx, embed_dim, self.padding_idx,
         )
@@ -490,7 +490,7 @@ class TransformerEncoder(FairseqEncoder):
         # encoder layers
         for layer in self.layers:
             # x, _ = layer(x, self_attn_padding_mask=encoder_padding_mask, real_positions=real_positions)
-            x, _ = layer(x, self_attn_padding_mask=encoder_padding_mask,)
+            x, _ = layer(x, self_attn_padding_mask=encoder_padding_mask, )
 
         return {
             'encoder_out': x,  # T x B x C
@@ -521,7 +521,7 @@ class TransformerEncoder(FairseqEncoder):
         return min(self.max_source_positions, self.embed_positions.max_positions())
 
 
-class NgramTransformerDecoder(FairseqIncrementalDecoder):
+class NARTransformerDecoder(FairseqIncrementalDecoder):
     """
     Transformer decoder consisting of *args.decoder_layers* layers. Each layer
     is a :class:`TransformerDecoderLayer`.
@@ -536,7 +536,6 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
     def __init__(self, args, dictionary, embed_tokens, no_encoder_attn=False):
         super().__init__(dictionary)
         self.register_buffer('version', torch.Tensor([3]))
-        self.ngram = args.ngram
         self.num_buckets = args.num_buckets
         self.relative_max_distance = args.relative_max_distance
 
@@ -550,19 +549,18 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
         self.max_target_positions = args.max_target_positions
         self.embed_dim = embed_dim
         self.embed_tokens = embed_tokens
-        self.embed_scale = None #math.sqrt(embed_dim)  # todo: try with input_embed_dim
+        self.embed_scale = None  # math.sqrt(embed_dim)  # todo: try with input_embed_dim
 
         self.embed_positions = LearnedPositionalEmbedding(
             args.max_target_positions + 2 + self.padding_idx, embed_dim, self.padding_idx,
         )
 
-        self.ngram_input_embed = Embedding(self.ngram, input_embed_dim, None)
+        self.ngram_input_embed = Embedding(1, input_embed_dim, None)
 
         self.layers = nn.ModuleList([])
 
         self.layers.extend([
-            NgramTransformerDecoderLayer(
-                args.ngram,
+            NARTransformerDecoderNARLayer(
                 args.decoder_embed_dim,
                 args.decoder_ffn_embed_dim,
                 args.decoder_attention_heads,
@@ -590,15 +588,8 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
         # T
         T = prev_output_tokens.size(1)
         # x [B, (1+ngram)*T, C]
-        x_list, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state, **unused)
-        x_predicted = x_list[1:]
-        x_predicted = [self.output_layer(x) for x in x_predicted]
-        if incremental_state is not None:
-            x_predicted = x_predicted[0]
-            for k in extra:
-                if extra[k] is not None:
-                    extra[k] = extra[k][0]
-        return x_predicted, extra
+        x, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state, **unused)
+        return self.output_layer(x), extra
 
     def _relative_positions_bucket(self, relative_positions, bidirectional=False):
         num_buckets = self.num_buckets
@@ -693,47 +684,16 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
 
         predicting_stream_pos_embed = self.embed_positions._forward(real_positions + 1)
 
-        if incremental_state is not None:
-            prev_output_tokens = prev_output_tokens[:, -1:]
-            if main_stream_pos_embed is not None:
-                main_stream_pos_embed = main_stream_pos_embed[:, -1:]
-
-        x = self.embed_tokens(prev_output_tokens)
         # embed tokens and positions
         if self.embed_scale is not None:
-            x *= self.embed_scale
+            x = (self.embed_scale * self.ngram_input_embed.weight[0] + predicting_stream_pos_embed).transpose(0, 1)
+        else:
+            x = (self.ngram_input_embed.weight[0] + predicting_stream_pos_embed).transpose(0, 1)
 
-        if main_stream_pos_embed is not None:
-            x += main_stream_pos_embed
-
-        # B x T x C -> T x B x C
-        x = x.transpose(0, 1)
         attn = None
-
         inner_states = [x]
-        if main_stream_pos_embed is None:
-            print('positions should be used to predict ngrams')
-            raise Exception()
-
-        if self.embed_scale is not None:
-            ngram_input_embed = self.embed_scale * self.ngram_input_embed.weight
-        else:
-            ngram_input_embed = self.ngram_input_embed.weight
-
-        if incremental_state is not None:
-            B = x.size(1)
-            ngram_masks = [
-                (ngram_input_embed[ngram - 1] + predicting_stream_pos_embed).transpose(0, 1).repeat(1, B, 1)
-                for ngram in range(self.ngram)]
-        else:
-            ngram_masks = [(ngram_input_embed[ngram - 1] + predicting_stream_pos_embed).transpose(0, 1) for
-                           ngram in range(self.ngram)]
 
         self_attn_mask = self.buffered_future_mask(x) if incremental_state is None else None
-        ngram_mask_matrix = self.buffered_future_mask_ngram(x) if incremental_state is None else None
-
-        # TODO in train [(1+ngram)*T, B, C], in inference [T+ngram, B, C]
-        x = torch.cat([x] + ngram_masks, 0)
 
         if self.emb_layer_norm:
             x = self.emb_layer_norm(x)
@@ -748,7 +708,7 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
                 encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
                 incremental_state,
                 self_attn_mask=self_attn_mask,
-                ngram_mask_matrix=ngram_mask_matrix,
+                ngram_mask_matrix=None,
                 i_buckets_main_stream=i_buckets_main_stream,
                 i_bucket_relative_stream=i_bucket_relative_stream,
                 real_positions=real_positions
@@ -756,13 +716,12 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
             inner_states.append(x)
 
         # TODO [(1+ngram)*T, B, C] -> [B, (1+ngram)*T, C]
-        x_list = x.transpose(0, 1).chunk(1 + self.ngram, 1)
         if attn is not None:
-            attn_list = attn.transpose(0, 1).chunk(1 + self.ngram, 1)
+            assert False
         else:
             attn_list = None
 
-        return x_list, {'attn': attn_list}
+        return x.transpose(0, 1), {'attn': attn_list}
 
     def get_normalized_probs(self, net_output, log_probs, sample):
         """Get normalized probabilities (or log probs) from a net's output."""
@@ -787,7 +746,6 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
             return utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
         else:
             return utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
-        
 
     def output_layer(self, features, **kwargs):
         """Project features to the vocabulary size."""
@@ -839,9 +797,8 @@ def Linear(in_features, out_features, bias=True):
     return m
 
 
-@register_model_architecture('ngram_transformer_prophet', 'ngram_transformer_prophet')
+@register_model_architecture('bang_nar', 'bang_nar')
 def base_architecture(args):
-    args.ngram = getattr(args, 'ngram', 2)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -865,9 +822,8 @@ def base_architecture(args):
     args.load_sep = getattr(args, 'load_sep', False)
 
 
-@register_model_architecture('ngram_transformer_prophet', 'ngram_transformer_prophet_base')
+@register_model_architecture('bang_nar', 'bang_nar_base')
 def transformer_base(args):
-    args.ngram = getattr(args, 'ngram', 2)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -891,9 +847,8 @@ def transformer_base(args):
     base_architecture(args)
 
 
-@register_model_architecture('ngram_transformer_prophet', 'ngram_transformer_prophet_middle')
+@register_model_architecture('bang_nar', 'bang_nar_middle')
 def transformer_middle(args):
-    args.ngram = getattr(args, 'ngram', 2)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -909,9 +864,8 @@ def transformer_middle(args):
     transformer_base(args)
 
 
-@register_model_architecture('ngram_transformer_prophet', 'ngram_transformer_prophet_large')
+@register_model_architecture('bang_nar', 'bang_nar_large')
 def transformer_big(args):
-    args.ngram = getattr(args, 'ngram', 2)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 

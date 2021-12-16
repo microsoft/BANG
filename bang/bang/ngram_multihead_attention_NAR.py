@@ -33,7 +33,7 @@ class NgramMultiheadAttentionNAR(nn.Module):
 
     def __init__(self, embed_dim, num_heads, kdim=None, vdim=None, dropout=0., bias=True,
                  add_bias_kv=False, add_zero_attn=False, self_attention=False,
-                 encoder_decoder_attention=False,ngram=2, num_buckets=32, relative_max_distance=128):
+                 encoder_decoder_attention=False, num_buckets=32, relative_max_distance=128):
         super().__init__()
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
@@ -45,8 +45,6 @@ class NgramMultiheadAttentionNAR(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
-        self.ngram = ngram
-
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
         self.scaling = self.head_dim ** -0.5
 
@@ -170,51 +168,6 @@ class NgramMultiheadAttentionNAR(nn.Module):
 
         return result
 
-    def ngram_relative_logits(self, query, attn_weights, real_positions, i_bucket_relative_stream):
-        # input query [ngram, T,B,C]
-        # input attn_weights [ngram, B*head,T,S]
-        # input real_positions [B,T] or [1,1]
-        # input i_bucket_relative_stream [B,T, 2*T] or None
-
-        N, T, B, _ = query.size()
-        _, BH, _, S = attn_weights.size()
-
-        if i_bucket_relative_stream is not None:
-            i_buckets = i_bucket_relative_stream
-        else:
-            # [B,T,S]
-            assert real_positions[0][0] == S - 1, 'memory position is 1 2 3 4 5(S-1)'
-            relative_positions = torch.arange(0, S).unsqueeze(0).unsqueeze(0).repeat(B,T,1).to(real_positions.device)
-            # print('relative_positions', relative_positions)
-            # [B,T,1]
-            real_positions = real_positions.unsqueeze(0).repeat(B,T,1)
-            relative_positions = relative_positions
-            # [B,T,2*T] or [B,T,S]
-            relative_positions = relative_positions - real_positions
-            i_buckets = self._relative_positions_bucket(relative_positions, False)
-
-        # [ngram, B, T, C]
-        query = query.transpose(1,2)
-        # [ngram, B, T, bucket*head]
-        values = self.relative_linear(query)
-        # [ngram, B, T, bucket, head]
-        values = values.view(*values.size()[:-1],self.num_buckets, self.num_heads)
-        # [ngram, B, head, T, bucket]
-        values = values.permute(0, 1, 4, 2, 3)
-        # [ngram*B*head, T, bucket]
-        values = values.reshape(N*BH,T,-1)
-
-        # [ngram, B, head*T, S]
-        i_buckets = i_buckets.unsqueeze(0).repeat(N,1,self.num_heads,1)
-
-        values = values.reshape(-1, values.size(-1))
-        i_buckets = i_buckets.view(-1, i_buckets.size(-1)).long()
-        # [ngram*B*head*T, S]
-        result = torch.gather(values,dim=1,index=i_buckets)
-        # [ngram, B*head, T, S]
-        result = result.view(N, BH , T, -1)
-
-        return result
 
     def forward(self, query, key, value, key_padding_mask=None, incremental_state=None,
                 need_weights=True, static_kv=False,

@@ -27,8 +27,8 @@ DEFAULT_MAX_SOURCE_POSITIONS = 512
 DEFAULT_MAX_TARGET_POSITIONS = 512
 
 
-@register_model('prophet_ar')
-class NgramTransformerProphetARModel(FairseqEncoderDecoderModel):
+@register_model('bang_ar')
+class BANGARModel(FairseqEncoderDecoderModel):
     """
     Args:
         encoder (TransformerEncoder): the encoder
@@ -144,7 +144,7 @@ class NgramTransformerProphetARModel(FairseqEncoderDecoderModel):
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
         decoder = NgramTransformerDecoder(args, tgt_dict, decoder_embed_tokens)
 
-        model = NgramTransformerProphetARModel(encoder, decoder)
+        model = BANGARModel(encoder, decoder)
 
         if args.load_from_pretrained_model is not None:
             states = torch.load(args.load_from_pretrained_model, map_location='cpu')
@@ -174,7 +174,7 @@ class NgramTransformerProphetARModel(FairseqEncoderDecoderModel):
             model.load_state_dict(states)
             args.load_from_pretrained_model = None  # Clear this param
 
-        return NgramTransformerProphetARModel(encoder, decoder)
+        return BANGARModel(encoder, decoder)
 
     def max_positions(self):
         return (self.encoder.max_positions(), self.decoder.max_positions())
@@ -283,7 +283,7 @@ class TransformerEncoderLayer(nn.Module):
 class NgramTransformerDecoderLayer(nn.Module):
     def __init__(
             self,
-            ngram=2,
+            ngram=1,
             embedding_dim: float = 768,
             ffn_embedding_dim: float = 3072,
             num_attention_heads: float = 8,
@@ -314,6 +314,7 @@ class NgramTransformerDecoderLayer(nn.Module):
             ngram=ngram
         )
         self.ngram = ngram
+        assert ngram == 1, 'BANG ar model ngram 1 for AR'
 
         # layer norm associated with the self attention layer
         self.self_attn_layer_norm = LayerNorm(self.embedding_dim, export=export)
@@ -843,9 +844,9 @@ def Linear(in_features, out_features, bias=True):
     return m
 
 
-@register_model_architecture('prophet_ar', 'prophet_ar')
+@register_model_architecture('bang_ar', 'bang_ar')
 def base_architecture(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -869,9 +870,9 @@ def base_architecture(args):
     args.load_sep = getattr(args, 'load_sep', False)
 
 
-@register_model_architecture('prophet_ar', 'prophet_ar_base')
+@register_model_architecture('bang_ar', 'bang_ar_base')
 def transformer_base(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -895,9 +896,9 @@ def transformer_base(args):
     base_architecture(args)
 
 
-@register_model_architecture('prophet_ar', 'prophet_ar_middle')
+@register_model_architecture('bang_ar', 'bang_ar_middle')
 def transformer_middle(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -913,9 +914,9 @@ def transformer_middle(args):
     transformer_base(args)
 
 
-@register_model_architecture('prophet_ar', 'prophet_ar_large')
+@register_model_architecture('bang_ar', 'bang_ar_large')
 def transformer_big(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 

@@ -21,14 +21,14 @@ from fairseq.modules import (
 )
 from fairseq.modules.transformer_sentence_encoder import init_bert_params
 from .learned_positional_embedding import LearnedPositionalEmbedding
-from .ngram_multihead_attention_NAR import NgramMultiheadAttentionNAR, ngram_attention_bias
+from .ngram_multihead_attention_AR_NAR_mixed import NgramMultiheadAttentionARNARMixed, ngram_attention_bias
 
 DEFAULT_MAX_SOURCE_POSITIONS = 512
 DEFAULT_MAX_TARGET_POSITIONS = 512
 
 
-@register_model('ngram_transformer_prophet_nar')
-class NgramTransformerProphetNARModel(FairseqEncoderDecoderModel):
+@register_model('bang_ar_nar_mixed')
+class BANGARNarMixedModel(FairseqEncoderDecoderModel):
     """
     Args:
         encoder (TransformerEncoder): the encoder
@@ -144,7 +144,7 @@ class NgramTransformerProphetNARModel(FairseqEncoderDecoderModel):
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
         decoder = NgramTransformerDecoder(args, tgt_dict, decoder_embed_tokens)
 
-        model = NgramTransformerProphetNARModel(encoder, decoder)
+        model = BANGARNarMixedModel(encoder, decoder)
 
         if args.load_from_pretrained_model is not None:
             states = torch.load(args.load_from_pretrained_model, map_location='cpu')
@@ -174,12 +174,12 @@ class NgramTransformerProphetNARModel(FairseqEncoderDecoderModel):
             model.load_state_dict(states)
             args.load_from_pretrained_model = None  # Clear this param
 
-        return NgramTransformerProphetNARModel(encoder, decoder)
+        return BANGARNarMixedModel(encoder, decoder)
 
     def max_positions(self):
         return (self.encoder.max_positions(), self.decoder.max_positions())
 
-    def forward(self, src_tokens=None, src_lengths=None, prev_output_tokens=None, **kwargs):
+    def forward(self, src_tokens=None, src_lengths=None, prev_output_tokens=None, flag_AR=True, **kwargs):
         """
         Run the forward pass for an encoder-decoder model.
         First feed a batch of source tokens through the encoder. Then, feed the
@@ -199,7 +199,7 @@ class NgramTransformerProphetNARModel(FairseqEncoderDecoderModel):
                 - a dictionary with any model-specific outputs
         """
         encoder_out = self.encoder(src_tokens, src_lengths=src_lengths, **kwargs)
-        decoder_out = self.decoder(prev_output_tokens, encoder_out=encoder_out, **kwargs)
+        decoder_out = self.decoder(prev_output_tokens, encoder_out=encoder_out, flag_AR=flag_AR, **kwargs)
         return decoder_out
 
 
@@ -280,10 +280,10 @@ class TransformerEncoderLayer(nn.Module):
         return x, attn
 
 
-class NgramTransformerDecoderNARLayer(nn.Module):
+class NgramTransformerDecoderARNARMixedLayer(nn.Module):
     def __init__(
             self,
-            ngram=2,
+            ngram=1,
             embedding_dim: float = 768,
             ffn_embedding_dim: float = 3072,
             num_attention_heads: float = 8,
@@ -304,7 +304,7 @@ class NgramTransformerDecoderNARLayer(nn.Module):
 
         # Initialize blocks
         self.activation_fn = utils.get_activation_fn(activation_fn)
-        self.ngram_self_attn = NgramMultiheadAttentionNAR(
+        self.ngram_self_attn = NgramMultiheadAttentionARNARMixed(
             self.embedding_dim,
             num_attention_heads,
             dropout=attention_dropout,
@@ -314,6 +314,7 @@ class NgramTransformerDecoderNARLayer(nn.Module):
             ngram=ngram
         )
         self.ngram = ngram
+        assert ngram == 1, 'ngram only supports 1 now'
 
         # layer norm associated with the self attention layer
         self.self_attn_layer_norm = LayerNorm(self.embedding_dim, export=export)
@@ -347,7 +348,8 @@ class NgramTransformerDecoderNARLayer(nn.Module):
             ngram_mask_matrix=None,
             i_buckets_main_stream=None,
             i_bucket_relative_stream=None,
-            real_positions=None
+            real_positions=None,
+            flag_AR=True
     ):
         # one main stream and ngram predicting streams
         residual = x
@@ -369,7 +371,8 @@ class NgramTransformerDecoderNARLayer(nn.Module):
             ngram_mask_matrix=ngram_mask_matrix,
             i_buckets_main_stream=i_buckets_main_stream,
             i_bucket_relative_stream=i_bucket_relative_stream,
-            real_positions=real_positions
+            real_positions=real_positions,
+            use_ar_attention=flag_AR
         )
 
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -566,7 +569,7 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
         self.layers = nn.ModuleList([])
 
         self.layers.extend([
-            NgramTransformerDecoderNARLayer(
+            NgramTransformerDecoderARNARMixedLayer(
                 args.ngram,
                 args.decoder_embed_dim,
                 args.decoder_ffn_embed_dim,
@@ -591,12 +594,24 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
                 prev_output_tokens,
                 encoder_out=None,
                 incremental_state=None,
+                flag_AR=True,
                 **unused):
-        # T
-        T = prev_output_tokens.size(1)
-        # x [B, (1+ngram)*T, C]
-        x, extra = self.extract_features(prev_output_tokens, encoder_out, incremental_state, **unused)
-        return self.output_layer(x), extra
+        if flag_AR:
+            #print('debug ar')
+            x_list, extra = self.extract_features_AR(prev_output_tokens, encoder_out, incremental_state, **unused)
+            x_predicted = x_list[1:]
+            x_predicted = [self.output_layer(x) for x in x_predicted]
+            if incremental_state is not None:
+                x_predicted = x_predicted[0]
+                for k in extra:
+                    if extra[k] is not None:
+                        extra[k] = extra[k][0]
+            return x_predicted, extra
+        else:
+            #print('debug nar')
+            x, extra = self.extract_features_NAR(prev_output_tokens, encoder_out, incremental_state, **unused)
+            return self.output_layer(x), extra
+
 
     def _relative_positions_bucket(self, relative_positions, bidirectional=False):
         num_buckets = self.num_buckets
@@ -665,7 +680,106 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
         ], 2).repeat(batch_size, 1, 1)
         return finetune_i_bucket_main_stream, finetune_i_bucket_predicting_stream
 
-    def extract_features(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
+    def extract_features_AR(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
+        # embed positions
+        # [bos, A, B, C, D, eos] with real positions [1,2,3,4,5,6](main stream), [2,3,4,5,6,7](predicting stream)
+        # target [B,C,D] with prev [A,B,C] from [A,B,C,D] as pretraining span with real positions [2,3,4],
+        # but target actually [3,4,5] for fine tune with another [bos].
+        # thus [2,3,4] used for main stream shifted prev [A,B,C], [3,4,5] used for predicting [B,C,D]
+        if 'positions' in unused:
+            # pretrain procedure
+            main_stream_pos_embed = self.embed_positions._forward(unused['positions'])
+            real_positions = unused['positions']
+            i_buckets_main_stream, i_bucket_relative_stream = \
+                self.cal_pretrain_relative_positions(real_positions)
+        else:
+            # fine tune procedure
+            main_stream_pos_embed, real_positions = self.embed_positions(
+                prev_output_tokens,
+                incremental_state=incremental_state,
+            ) if self.embed_positions is not None else None
+            if incremental_state is not None:
+                i_buckets_main_stream, i_bucket_relative_stream = None, None
+            else:
+                i_buckets_main_stream, i_bucket_relative_stream = \
+                    self.cal_finetune_relative_positions(real_positions)
+
+        predicting_stream_pos_embed = self.embed_positions._forward(real_positions + 1)
+
+        if incremental_state is not None:
+            prev_output_tokens = prev_output_tokens[:, -1:]
+            if main_stream_pos_embed is not None:
+                main_stream_pos_embed = main_stream_pos_embed[:, -1:]
+
+        x = self.embed_tokens(prev_output_tokens)
+        # embed tokens and positions
+        if self.embed_scale is not None:
+            x *= self.embed_scale
+
+        if main_stream_pos_embed is not None:
+            x += main_stream_pos_embed
+
+        # B x T x C -> T x B x C
+        x = x.transpose(0, 1)
+        attn = None
+
+        inner_states = [x]
+        if main_stream_pos_embed is None:
+            print('positions should be used to predict ngrams')
+            raise Exception()
+
+        if self.embed_scale is not None:
+            ngram_input_embed = self.embed_scale * self.ngram_input_embed.weight
+        else:
+            ngram_input_embed = self.ngram_input_embed.weight
+
+        if incremental_state is not None:
+            B = x.size(1)
+            ngram_masks = [
+                (ngram_input_embed[0] + predicting_stream_pos_embed).transpose(0, 1).repeat(1, B, 1)
+                for ngram in range(self.ngram)]
+        else:
+            ngram_masks = [(ngram_input_embed[0] + predicting_stream_pos_embed).transpose(0, 1) for
+                           ngram in range(self.ngram)]
+
+        self_attn_mask = self.buffered_future_mask(x) if incremental_state is None else None
+        ngram_mask_matrix = self.buffered_future_mask_ngram(x) if incremental_state is None else None
+
+        # TODO in train [(1+ngram)*T, B, C], in inference [T+ngram, B, C]
+        x = torch.cat([x] + ngram_masks, 0)
+
+        if self.emb_layer_norm:
+            x = self.emb_layer_norm(x)
+
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # decoder layers
+        for layer in self.layers:
+            x, attn = layer(
+                x,
+                encoder_out['encoder_out'] if encoder_out is not None else None,
+                encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
+                incremental_state,
+                self_attn_mask=self_attn_mask,
+                ngram_mask_matrix=ngram_mask_matrix,
+                i_buckets_main_stream=i_buckets_main_stream,
+                i_bucket_relative_stream=i_bucket_relative_stream,
+                real_positions=real_positions,
+                flag_AR=True
+            )
+            inner_states.append(x)
+
+        # TODO [(1+ngram)*T, B, C] -> [B, (1+ngram)*T, C]
+        x_list = x.transpose(0, 1).chunk(1 + self.ngram, 1)
+        if attn is not None:
+            attn_list = attn.transpose(0, 1).chunk(1 + self.ngram, 1)
+        else:
+            attn_list = None
+
+        return x_list, {'attn': attn_list}
+
+
+    def extract_features_NAR(self, prev_output_tokens, encoder_out=None, incremental_state=None, **unused):
         # embed positions
         # [bos, A, B, C, D, eos] with real positions [1,2,3,4,5,6](main stream), [2,3,4,5,6,7](predicting stream)
         # target [B,C,D] with prev [A,B,C] from [A,B,C,D] as pretraining span with real positions [2,3,4],
@@ -718,17 +832,19 @@ class NgramTransformerDecoder(FairseqIncrementalDecoder):
                 ngram_mask_matrix=None,
                 i_buckets_main_stream=i_buckets_main_stream,
                 i_bucket_relative_stream=i_bucket_relative_stream,
-                real_positions=real_positions
+                real_positions=real_positions,
+                flag_AR=False
             )
             inner_states.append(x)
 
         # TODO [(1+ngram)*T, B, C] -> [B, (1+ngram)*T, C]
         if attn is not None:
-            attn_list = attn.transpose(0, 1).chunk(1 + self.ngram, 1)
+            assert False
         else:
             attn_list = None
 
         return x.transpose(0, 1), {'attn': attn_list}
+
 
     def get_normalized_probs(self, net_output, log_probs, sample):
         """Get normalized probabilities (or log probs) from a net's output."""
@@ -804,9 +920,9 @@ def Linear(in_features, out_features, bias=True):
     return m
 
 
-@register_model_architecture('ngram_transformer_prophet_nar', 'ngram_transformer_prophet_nar')
+@register_model_architecture('bang_ar_nar_mixed', 'bang_ar_nar_mixed')
 def base_architecture(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -830,9 +946,9 @@ def base_architecture(args):
     args.load_sep = getattr(args, 'load_sep', False)
 
 
-@register_model_architecture('ngram_transformer_prophet_nar', 'ngram_transformer_prophet_nar_base')
+@register_model_architecture('bang_ar_nar_mixed', 'bang_ar_nar_mixed_base')
 def transformer_base(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -856,9 +972,9 @@ def transformer_base(args):
     base_architecture(args)
 
 
-@register_model_architecture('ngram_transformer_prophet_nar', 'ngram_transformer_prophet_nar_middle')
+@register_model_architecture('bang_ar_nar_mixed', 'bang_ar_nar_mixed_middle')
 def transformer_middle(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
@@ -874,9 +990,9 @@ def transformer_middle(args):
     transformer_base(args)
 
 
-@register_model_architecture('ngram_transformer_prophet_nar', 'ngram_transformer_prophet_nar_large')
+@register_model_architecture('bang_ar_nar_mixed', 'bang_ar_nar_mixed_large')
 def transformer_big(args):
-    args.ngram = getattr(args, 'ngram', 2)
+    args.ngram = getattr(args, 'ngram', 1)
     args.num_buckets = getattr(args, 'num_buckets', 32)
     args.relative_max_distance = getattr(args, 'relative_max_distance', 128)
 
