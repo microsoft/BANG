@@ -9,4 +9,4 @@ from . import bang_NAR
 from . import bang_NAR_generator
 from . import translation_bang_NAR
 from . import bang_AR_NAR_mixed
-from . import criterion_ngram_NAR_mixed
+from . import criterion_Ngram_NAR_mixed
