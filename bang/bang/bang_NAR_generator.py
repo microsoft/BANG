@@ -142,10 +142,10 @@ class BANGNARSequenceGenerator(object):
                 prev_out_tokens = src_tokens.new_ones(src_tokens.size(0), self.nar_max_length)
 
             if 'MixedModel' in type(model).__name__:
-                decoder_outs = model.decoder(src_tokens, encoder_outs, None, flag_AR=False)[0]
+                decoder_outs = model.decoder(prev_out_tokens, encoder_outs, None, flag_AR=False)[0]
             else:
-                decoder_outs = model.decoder(src_tokens, encoder_outs, None)[0]
-            #decoder_outs = model.decoder(src_tokens, encoder_outs, None)[0]
+                decoder_outs = model.decoder(prev_out_tokens, encoder_outs, None)[0]
+
             word_score_max_list, word_pred_list = decoder_outs.max(-1)
             finalized = []
             for word_score_max, word_pred in zip(word_score_max_list, word_pred_list):
