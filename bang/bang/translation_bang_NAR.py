@@ -41,10 +41,9 @@ class TranslationBANGNARTask(TranslationTask):
                             help='amount to upsample primary dataset')
         parser.add_argument('--truncate-source', default=False, action='store_true',
                             help='boolean to truncate source to max-source-positions')
-        parser.add_argument('--language-model-path', default=None,
-                            help='source language')
-        parser.add_argument('--lm-weight', default=0.5, type=float,
-                            help='prob = lm_weight * prob_lm + (1-lm_weight) * prob_decoder')
+        parser.add_argument('--max-nar-length', default=-1, type=int,
+                            help='inferenec max length')
+        
         # fmt: on
 
     @classmethod
@@ -73,4 +72,5 @@ class TranslationBANGNARTask(TranslationTask):
                 diverse_beam_strength=getattr(args, 'diverse_beam_strength', 0.5),
                 match_source_len=getattr(args, 'match_source_len', False),
                 no_repeat_ngram_size=getattr(args, 'no_repeat_ngram_size', 0),
+                nar_max_length=getattr(args, 'nar_max_length', -1),
             )

@@ -32,6 +32,7 @@ class BANGNARSequenceGenerator(object):
         diverse_beam_strength=0.5,
         match_source_len=False,
         no_repeat_ngram_size=0,
+        nar_max_length=-1
     ):
         """Generates translations of a given source sentence.
 
@@ -81,6 +82,7 @@ class BANGNARSequenceGenerator(object):
         self.retain_dropout = retain_dropout
         self.temperature = temperature
         self.match_source_len = match_source_len
+        self.nar_max_length = nar_max_length
         self.no_repeat_ngram_size = no_repeat_ngram_size
         assert sampling_topk < 0 or sampling, '--sampling-topk requires --sampling'
         assert sampling_topp < 0 or sampling, '--sampling-topp requires --sampling'
@@ -133,11 +135,14 @@ class BANGNARSequenceGenerator(object):
         with torch.no_grad():
             encoder_outs = model.encoder(**encoder_input)
             # NAR here
-            #print(type(model).__name__)
+
+            if self.nar_max_length == -1:
+                prev_out_tokens = src_tokens.new_ones(src_tokens.size(0), src_tokens.size(1))
+            else:
+                prev_out_tokens = src_tokens.new_ones(src_tokens.size(0), self.nar_max_length)
+
             if 'MixedModel' in type(model).__name__:
-                #print('ok')
                 decoder_outs = model.decoder(src_tokens, encoder_outs, None, flag_AR=False)[0]
-                #print(decoder_outs)
             else:
                 decoder_outs = model.decoder(src_tokens, encoder_outs, None)[0]
             #decoder_outs = model.decoder(src_tokens, encoder_outs, None)[0]
